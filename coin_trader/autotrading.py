@@ -1,3 +1,4 @@
+from torch.distributions.constraints import interval
 from ppoa3cagent import PPOA3CAgent
 from combined_data_preprocessing import preprocess_data
 import logging
@@ -5,6 +6,7 @@ import time
 import pyupbit
 import torch
 import threading
+import datetime
 
 # API 키 설정
 with open("key_info.txt") as f:
@@ -16,22 +18,24 @@ with open("key_info.txt") as f:
 upbit = pyupbit.Upbit(acc_key, sec_key)
 
 # 로깅 설정
-logging.basicConfig(filename='cnn_trading_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(filename='a3cagent_trading_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
 
 # 데이터 수집 함수
-def collect_data(coin):
-    df = pyupbit.get_ohlcv(coin, interval="minute60", count=100)
+def collect_data(coin, interval=15, count=100):
+    df = pyupbit.get_ohlcv(coin, interval=f"minute{interval}", count=count)
     if df is None or df.empty:
         logging.error(f"{coin} 데이터 수집 실패: 데이터가 비어있습니다.")
     return df
 
 # 자동매매 클래스 정의
 class AutoTrading:
-    def __init__(self, agent, coin):
+    def __init__(self, agent, coin, interval=15, count=32):
         self.agent = agent  # PPO-A3C 에이전트
         self.coin = coin  # 거래할 코인
         self.buy_price = None  # 구매 가격 초기화
         self.running = True  # 자동매매 실행 플래그
+        self.interval = interval
+        self.count = count
 
     def get_current_price(self):
         """현재 가격을 가져오는 메서드"""
@@ -53,35 +57,35 @@ class AutoTrading:
         """주어진 행동에 따라 거래를 실행하는 메서드"""
         current_price = self.get_current_price()  # 현재 가격 가져오기
         if action == 0:  # 매수
-            print("매수를 시도합니다.")
+            print(f"{self.coin} 매수를 시도합니다.")
             krw_balance = self.get_balance()  # 현재 보유 원화 잔고
             amount_to_buy = krw_balance * 0.3  # 30% 매수
             if amount_to_buy > 5000:  # 매수할 금액이 있는 경우
                 # 매수 주문 실행
                 upbit.buy_market_order(self.coin, amount_to_buy)  # 30% 매수
                 self.buy_price = current_price  # 구매 가격 저장
-                print(f"Bought {self.coin} at {self.buy_price} KRW")
+                print(f"{datetime.datetime.now()} Bought {self.coin} at {self.buy_price} KRW")
             else:
                 print("매수할 금액이 부족합니다.")
         elif action == 1:  # 매도
-            print("매도를 시도합니다.")
+            print(f"{self.coin} 매도를 시도합니다.")
             coin_balance = upbit.get_balance(self.coin)  # 보유 코인 잔고 조회
             if coin_balance is not None and coin_balance > 0:  # 매도할 코인이 있는 경우
                 # 매도 주문 실행
                 upbit.sell_market_order(self.coin, coin_balance)  # 보유 코인 모두 매도
-                print(f"Sold {self.coin} at {current_price} KRW")
+                print(f"{datetime.datetime.now()} Sold {self.coin} at {current_price} KRW")
                 self.buy_price = None  # 구매 가격 초기화
             else:
-                print("보유코인 잔고가 없습니다.")
+                print(f"{self.coin} 보유코인 잔고가 없습니다.")
         elif action == 2:  # 유지
-            print("현상태를 유지하겠습니다.")
-            print(f"Holding {self.coin} at {current_price} KRW")
+            print(f"{self.coin} 현상태를 유지하겠습니다.")
+            print(f"{datetime.datetime.now()} Holding {self.coin} at {current_price} KRW")
 
     def run(self):
         """자동매매를 실행하는 메서드"""
         while self.running:
             # 시장 데이터 가져오기
-            market_data = collect_data(self.coin)
+            market_data = collect_data(self.coin, self.interval, self.count)
             market_data = preprocess_data(market_data)
             # 상태를 텐서로 변환
             if market_data is not None:
@@ -92,7 +96,7 @@ class AutoTrading:
                 action = self.agent.act(state)  # 행동 선택
                 # 거래 실행
                 self.execute_trade(action)  # 선택한 행동에 따라 거래 실행
-                time.sleep(1200)  # 20분 대기 (20분마다 거래 결정)
+                time.sleep(900)  # 15분 대기 (15분마다 거래 결정)
             else:
                 print(f"{self.coin} 데이터가 없습니다.")
                 time.sleep(60)
@@ -102,8 +106,8 @@ class AutoTrading:
         print("Auto trading stopped.")
 
 
-def auto_trade(agent, coin):
-    auto_trader = AutoTrading(agent, coin)
+def auto_trade(agent, coin, interval, count):
+    auto_trader = AutoTrading(agent, coin, interval, count)
     try:
         auto_trader.run()  # 자동매매 실행
     except KeyboardInterrupt:
@@ -114,13 +118,15 @@ def auto_trade(agent, coin):
 if __name__ == "__main__":
     # 자동매매 클래스 초기화
     coins = ["KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP", "KRW-QKC", "KRW-DOGE", "KRW-AAVE"]  # 거래할 코인
+    interval = 15
+    count = 32
     model_path = 'combined_models/ppo_model.h5'  # 모델 파일 경로
     threads = []
     for coin in coins:
         agent = PPOA3CAgent(coin)
         agent.load(model_path)  # 저장된 모델 로드
         agent.set_training_mode(mode=False)
-        thread = threading.Thread(target=auto_trade, args=(agent, coin))
+        thread = threading.Thread(target=auto_trade, args=(agent, coin, interval, count))
         thread.start()
         threads.append(thread)
         time.sleep(3)  # 각 스레드 시작 사이에 대기

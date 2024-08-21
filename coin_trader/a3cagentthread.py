@@ -8,8 +8,8 @@ import os
 logging.basicConfig(filename='ppoa3c_trading_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
 
 # 데이터 수집 함수
-def collect_data(coin):
-    df = pyupbit.get_ohlcv(coin, interval="minute60", count=100)
+def collect_data(coin, interval=15, count=100):
+    df = pyupbit.get_ohlcv(coin, interval=f"minute{interval}", count=count)
     if df is None or df.empty:
         logging.error(f"{coin} 데이터 수집 실패: 데이터가 비어있습니다.")
     return df
@@ -17,11 +17,13 @@ def collect_data(coin):
 
 # A3C 에이전트를 실행하기 위한 스레드 클래스
 class A3CAgentThread(threading.Thread):
-    def __init__(self, agent, num_episodes, batch_size=32):
+    def __init__(self, agent, num_episodes, batch_size=32, interval=15, count=100):
         super(A3CAgentThread, self).__init__()
         self.agent = agent
         self.num_episodes = num_episodes
         self.batch_size = batch_size
+        self.interval = interval
+        self.count = count
 
     def run(self):
         print(f"{self.agent.coin} - A3C 에이전트 학습 시작...")
@@ -31,7 +33,7 @@ class A3CAgentThread(threading.Thread):
         total_buy_count = 0
         total_sell_count = 0
         total_hold_count = 0
-        df = collect_data(self.agent.coin)
+        df = collect_data(self.agent.coin, self.interval, self.count)
 
         for episode in range(self.num_episodes):
             print(f"{self.agent.coin} - Episode {episode + 1}/{self.num_episodes}")
@@ -50,6 +52,7 @@ class A3CAgentThread(threading.Thread):
 
             # 초기 상태 설정
             preprocessed_df = preprocess_data(df)
+
 
             state = self.agent.get_initial_state(preprocessed_df)  # 초기 상태 가져오기
             for i in range(len(preprocessed_df) - 2):
@@ -111,7 +114,7 @@ class A3CAgentThread(threading.Thread):
 
 
 if __name__ == "__main__":
-    coin = "KRW-ETH"
+    coin = "KRW-DOGE"
     agent = PPOA3CAgent(coin)
     model_path = 'combined_models/ppo_model.h5'  # 모델 파일 경로
     # 모델 저장 디렉토리 확인 및 생성
@@ -126,5 +129,5 @@ if __name__ == "__main__":
         agent.load(model_path)  # 저장된 모델 불러오기
     else:
         print(f"{model_path} 파일이 발견되지 않았습니다. 새롭게 학습을 시작합니다.")
-    a3c_thread = A3CAgentThread(agent, num_episodes=1000)
+    a3c_thread = A3CAgentThread(agent, num_episodes=100, interval=15, count=200)
     a3c_thread.start()
